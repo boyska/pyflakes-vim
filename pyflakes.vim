@@ -21,6 +21,10 @@ if !exists('g:pyflakes_builtins')
     let g:pyflakes_builtins = []
 endif
 
+if !exists('g:pyflakes_pep8_enabled')
+  let g:pyflakes_pep8_enabled = 1
+endif
+
 if !exists("b:did_python_init")
     let b:did_python_init = 0
 
@@ -46,6 +50,7 @@ if sys.version_info[:2] < (2, 5):
 scriptdir = os.path.join(os.path.dirname(vim.eval('expand("<sfile>")')), 'pyflakes')
 sys.path.insert(0, scriptdir)
 
+import pep8
 from pyflakes import checker, ast, messages
 from operator import attrgetter
 import re
@@ -56,12 +61,25 @@ class SyntaxError(messages.Message):
         messages.Message.__init__(self, filename, lineno, col)
         self.message_args = (message,)
 
+class SilentPep8(pep8.Checker):
+    def __init__(self, filename, buffer, messages):
+        super(SilentPep8, self).__init__(None)
+        self.filename = filename
+        self.lines = buffer
+        self._all_messages = messages
+
+    def report_error(self, line_number, offset, text, check):
+        message = SyntaxError(self.filename, line_number, offset, text)
+        self._all_messages.append(message)
+
 class blackhole(object):
     write = flush = lambda *a, **k: None
 
 def check(buffer):
     filename = buffer.name
     contents = buffer[:]
+
+    pep8.process_options([filename])
 
     # shebang usually found at the top of the file, followed by source code encoding marker.
     # assume everything else that follows is encoded in the encoding.
@@ -81,8 +99,10 @@ def check(buffer):
         contents = contents.decode(vimenc)
 
     builtins = []
+    pep8_enabled = 1
     try:
         builtins = eval(vim.eval('string(g:pyflakes_builtins)'))
+        pep8_enabled = int(vim.eval('g:pyflakes_pep8_enabled'))
     except Exception:
         pass
 
@@ -105,6 +125,10 @@ def check(buffer):
         return [SyntaxError(filename, lineno, offset, str(value))]
     else:
         w = checker.Checker(tree, filename, builtins = builtins)
+        if pep8_enabled:
+            lines = [line + '\n' for line in buffer]
+            p8 = SilentPep8(filename, lines, w.messages)
+            p8.check_all()
         w.messages.sort(key = attrgetter('lineno'))
         return w.messages
 
